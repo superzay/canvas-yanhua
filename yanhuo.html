@@ -1,0 +1,310 @@
+﻿<!DOCTYPE html>
+<html>
+
+	<head>
+		<title>canvas</title>
+		<meta http-equiv="content-type" content="text/html;charset=UTF-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+		<style>
+			body {
+				padding: 0px!important;
+				margin: 0
+			}
+		</style>
+	</head>
+
+	<body>
+		<div id='a' style='position:relative;width:300px;height:500px;margin:auto;'>
+			<canvas id='canvas' style='position:absolute;top:0;left:0'></canvas>
+
+		</div>
+		<div id='b' style='line-height:100px;text-align: center;cursor:pointer;color:#fff;border:0px;height:100px;width:100px;border-radius:50px;position:fixed;top:500px;left:200px;background:#384736'>
+			不放了
+		</div>
+
+	</body>
+	<!--采用es6语法，注意做浏览器兼容处理-->
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/babel-core/5.8.23/browser.min.js"></script>
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/babel-polyfill/7.4.4/polyfill.min.js"></script>
+	<script type='text/babel'>
+		//canvas闭包空间
+		(function() {
+			//画面绘制采用mvc思想实现
+			//每20ms固定的对画布刷新一次,基本保持与显示器帧率一致
+			//公共数据
+			let canvas;
+			let ctx; //canvas元素的contex对象
+			let width; //画布宽度
+			let height; //画布高度
+			let swingR = 70; //气泡摆动半径
+			let bubbleImportWidth = 100; //气泡出口范围
+			let bubbleR = 5; //气泡半径
+			let initBubbleOpacity = 0.8; //气泡初始透明度
+			let colors = ['#FF0000', '#FFFF00', '#FF7F00', '#00FF00', '#00FFFF', '#0000EE', '#8B00FF'];
+			let status = 'rise'; //气泡状态，rise上升，bomb爆炸，bombOver爆炸结束
+			let bombTime = 1000; //爆炸时间，单位ms
+			let bubbles = [];
+			let intervalTimer = 0;
+
+			//定义气泡的类
+			class Bubble {
+				constructor(obj) {
+
+					this.bubbleR = obj.bubbleR; //气泡半径
+					this.axisX = obj.axisX; //气泡水平位置，相对于画布
+					this.axisY = obj.axisY; //气泡垂直位置，相对于画布
+					this.bubbleOpacity = obj.bubbleOpacity; //气泡透明度
+					this.bubbleColor = obj.bubbleColor;
+					this.swingCenterLine = obj.swingCenterLine; //气泡摆动中线，一个x轴坐标
+					this.initSwingAngle = obj.initSwingAngle; //气泡初始摆动角度
+					this.swingR = obj.swingR; //气泡摆动半径，单位像素
+					//气泡每秒上升速度，单位px，
+					//由速度和冒泡起始时间计算出冒泡高度，
+					//由高度和单位长度计算出正弦曲线角度，
+					//由角度计算出某一高度在正弦曲线轨迹上的水平位置，
+					this.riseSpeed = obj.riseSpeed; //气泡上升速度，单位像素/每秒
+					this.createdTime = new Date().getTime(); //气泡创建时间
+					this.status = obj.status; //气泡状态，rise上升，bomb爆炸，bombOver爆炸结束
+					this.bombHeight = obj.bombHeight; //炸点高度
+					this.bombBubbles = [];
+					(() => {
+						let num = 0;
+						if(Math.random() < 0.75) {
+							num = 8
+						} else {
+							num = 18
+						}
+						let speed = 0;
+						switch(num) {
+							case 8:
+								speed = 70;
+								break
+							case 18:
+								speed = 100
+						}
+
+						for(let i = 0; i < num; i++) {
+							this.bombBubbles.push({
+								initOpacity: 1,
+								opacity: 1,
+								bombTime: 0,
+								initAxisX: 0,
+								initAxisY: 0,
+								length: 0,
+								radius: 2,
+								speed: speed,
+								angle: i * 360 / num,
+								color: this.bubbleColor
+							})
+						}
+					})();
+
+					return this
+				}
+			}
+			//设置画布大小
+			(function() {
+				let a = document.getElementById('a');
+				height = parseFloat(window.getComputedStyle(a, null).getPropertyValue('height'));
+				width = parseFloat(window.getComputedStyle(a, null).getPropertyValue('width'));
+				document.getElementById("canvas").width = width;
+				document.getElementById("canvas").height = height;
+			})();
+
+			//创建气泡函数
+			function createBubble() {
+				let obj = {};
+				obj.initSwingAngle = parseInt(Math.random() * 360);
+				obj.swingCenterLine = parseInt(Math.random() * bubbleImportWidth) + parseInt((width - bubbleImportWidth) / 2);
+				obj.riseSpeed = parseInt(Math.random() * 160 + 200);
+				obj.bubbleColor = colors[parseInt(Math.random() * 7)];
+				obj.axisX = 0;
+				obj.axisY = height;
+				obj.bubbleOpacity = initBubbleOpacity;
+				obj.swingR = swingR;
+				obj.bubbleR = bubbleR;
+				obj.status = status;
+				obj.bombHeight = parseInt(Math.random() * 130 + 50);
+				bubbles.push(new Bubble(obj))
+
+			}
+
+			//计算气泡的实时位置,透明度,溢出移除函数
+			//如果气泡处于爆炸状态，计算气泡的炸点的位置等数据
+			function cpBubblePosition() {
+				//爆炸结束的气泡移除
+				let arr = [];
+				bubbles.forEach((item, index) => {
+					if(item.status === 'bombOver') {
+						arr.push(item)
+					}
+				})
+
+				arr.forEach((item, index) => {
+					bubbles.splice(bubbles.indexOf(item), 1)
+				})
+
+				//计算小球是否要爆炸了
+				bubbles.forEach((item, index) => {
+					if(item.axisY <= item.bombHeight && item.status === 'rise') {
+						bomb(item)
+					}
+				})
+
+				//遍历气泡，计算气泡的实时水平和垂直方向位置，根据高度占比，计算透明度，达到顶端透明度接近0
+				//如果气泡处于爆炸状态，计算爆炸气泡的位置等数据
+				bubbles.forEach((item, index) => {
+					if(item.status === 'rise') {
+						//计算气泡位置等数据
+						let time = (new Date().getTime() - item.createdTime) / 1000;
+						item.axisY = height - time * item.riseSpeed;
+						//根据高度推算出小球正弦轨迹对应的角度，然后去掉小球抛出时的初始角度
+						let angle = parseInt((time * item.riseSpeed % (item.swingR * 4)) / (item.swingR * 4) * 360) - item.initSwingAngle;
+						//根据上面的角度推出小球的水平位置
+						item.axisX = item.swingCenterLine - Math.sin(angle * (Math.PI / 180)) * item.swingR * 0;
+					} else {
+						//计算爆炸气泡的有关数据
+						item.bombBubbles.forEach((bombBubble) => {
+							bombBubble.length = (new Date().getTime() - bombBubble.bombTime) / 1000 * bombBubble.speed * 0.5;
+							bombBubble.opacity = bombBubble.initOpacity * (1 - (new Date().getTime() - bombBubble.bombTime) / bombTime);
+							bombBubble.opacity = bombBubble.opacity < 0 ? 0 : bombBubble.opacity;
+						})
+					}
+
+				})
+			}
+
+			//点击气泡爆炸，事件函数
+			function bomb(bubble) {
+				bubble.status = 'bomb';
+				bubble.bombBubbles.forEach((bombBubble) => {
+					bombBubble.bombTime = new Date().getTime();
+					bombBubble.initAxisX = bubble.axisX;
+					bombBubble.initAxisY = bubble.axisY;
+					bombBubble.initOpacity = bubble.bubbleOpacity;
+				})
+				setTimeout(function() {
+					bubble.status = 'bombOver'
+				}, bombTime)
+			};
+
+			//主绘图方法,20ms刷新一次
+			function draw() {
+				canvas = document.getElementById("canvas");
+				ctx = canvas.getContext("2d");
+				//清除画布
+				ctx.clearRect(0, 0, width, height);
+
+				//气泡计算和渲染过程，放在一个闭包中
+				//计算一次气泡的位置等数据，然后遍历气泡数组渲染气泡
+				(() => {
+					cpBubblePosition();
+					bubbles.forEach((item, index) => {
+						if(item.status === 'rise') {
+							//画尾部喷射火焰
+							ctx.save(); //保存初始状态
+							ctx.globalAlpha = item.bubbleOpacity - 0.5;
+							//创建渐变
+							let linearGradient = ctx.createLinearGradient(item.axisX, item.axisY, item.axisX, item.axisY + 30);
+							//添加颜色，颜色可以在起点和终点间添加多个
+							linearGradient.addColorStop(0, item.bubbleColor);
+							linearGradient.addColorStop(1, 'rgba(255,255,255,0)');
+							ctx.fillStyle = linearGradient;
+							//清空路径
+							ctx.beginPath();
+							ctx.moveTo(item.axisX, item.axisY);
+							ctx.lineTo(item.axisX + 4, item.axisY);
+							ctx.lineTo(item.axisX, item.axisY + 40);
+							ctx.lineTo(item.axisX - 4, item.axisY);
+							ctx.closePath();
+							ctx.fill();
+							ctx.restore(); //回退状态
+
+							//画顶部小球
+							ctx.save(); //保存初始状态		
+							ctx.globalAlpha = item.bubbleOpacity;
+							//创建径向渐变
+							let x1 = item.axisX;
+							let y1 = item.axisY;
+							let r1 = item.bubbleR;
+							let x2 = item.axisX - item.bubbleR / 2;
+							let y2 = item.axisY - item.bubbleR / 2;
+							let r2 = item.bubbleR / 4;
+							let radialGradient = ctx.createRadialGradient(x1, y1, r1, x2, y2, r2);
+							//渐变对象着色
+							radialGradient.addColorStop(0, item.bubbleColor);
+							radialGradient.addColorStop(1, '#fff');
+							//使用渐变色
+							ctx.fillStyle = radialGradient;
+
+							ctx.beginPath();
+							ctx.arc(item.axisX, item.axisY, item.bubbleR, 0, Math.PI * 2)
+							ctx.fill();
+							ctx.restore(); //回退状态
+
+						} else {
+							item.bombBubbles.forEach((bombBubble) => {
+								ctx.save(); //保存初始状态
+								ctx.translate(bombBubble.initAxisX, bombBubble.initAxisY);
+								ctx.rotate(bombBubble.angle * Math.PI / 180);
+								ctx.globalAlpha = bombBubble.opacity;
+								//创建渐变
+								let linearGradient = ctx.createLinearGradient(bombBubble.length, 0, 2 * bombBubble.length, 0);
+								//添加颜色，颜色可以在起点和终点间添加多个
+								linearGradient.addColorStop(0, '#fff');
+								linearGradient.addColorStop(1, bombBubble.color);
+								ctx.strokeStyle = linearGradient;
+								ctx.lineWidth = 2.5;
+								ctx.lineCap = 'round';
+								//清空路径
+								ctx.beginPath();
+								ctx.moveTo(bombBubble.length, 0);
+								ctx.lineTo(bombBubble.length * 2, 0);
+								ctx.stroke();
+								ctx.restore(); //回退状态
+							})
+						}
+					})
+
+				})();
+
+			}
+
+			function start() {
+				//每隔1300ms产生一个气泡，同时500ms后在产生一个气泡
+				intervalTimer = setInterval(() => {
+					createBubble();
+
+					setTimeout(() => {
+						createBubble()
+
+					}, 200)
+					setTimeout(() => {
+						createBubble()
+
+					}, 500)
+				}, 1000)
+			}
+
+			document.getElementById('b').addEventListener('click', function(event) {
+				if(document.getElementById('b').innerText === '不放了') {
+					clearInterval(intervalTimer);
+					document.getElementById('b').innerHTML = '继续放'
+				} else {
+					document.getElementById('b').innerHTML = '不放了'
+					createBubble();
+					start();
+				}
+			})
+
+			createBubble();
+			start();
+			//调用主渲染函数，渲染canvas画布，每秒渲染50次
+			setInterval(() => {
+				draw();
+			}, 20)
+
+		})();
+	</script>
+
+</html>
